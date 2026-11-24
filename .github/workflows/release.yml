@@ -1,0 +1,73 @@
+# test -> build -> push (by digest) -> deploy the same digest to both regions, region after region.
+# Auth is keyless (GitHub OIDC -> Workload Identity Federation). Terraform ignores the image/env on the
+# services, so CI and the drills own revisions; Terraform owns everything around them.
+name: release
+
+on:
+  push:
+    branches: [main]
+    paths: ["app/**", ".github/workflows/release.yml"]
+  pull_request:
+    paths: ["app/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID: bj-multiregion-dr
+  IMAGE: us-east4-docker.pkg.dev/bj-multiregion-dr/apps/ledger-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: app/go.mod
+      - run: go vet ./... && go test -count=1 -race ./...
+        working-directory: app
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: sa-github-ci@bj-multiregion-dr.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: gcloud auth configure-docker us-east4-docker.pkg.dev --quiet
+      - id: build
+        run: |
+          TAG="sha-${GITHUB_SHA::7}"
+          docker build --build-arg VERSION="$TAG" -t "$IMAGE:$TAG" app
+          docker push "$IMAGE:$TAG"
+          echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$IMAGE:$TAG")" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 1          # one region at a time: the other keeps serving if this one goes wrong
+      matrix:
+        region: [us-east1, us-east4]
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: sa-github-ci@bj-multiregion-dr.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Roll ${{ matrix.region }}
+        run: |
+          gcloud run services update ledger-api --project "$PROJECT_ID" --region "${{ matrix.region }}" \
+            --image "${{ needs.build.outputs.digest }}" --quiet
+          URL=$(gcloud run services describe ledger-api --project "$PROJECT_ID" --region "${{ matrix.region }}" --format='value(status.url)')
+          curl -fsS "$URL/version"
