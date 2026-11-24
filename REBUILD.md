@@ -88,8 +88,9 @@ Rebuilding later: `./reimport.sh` first (the WIF pool/provider survive soft-dele
 
 - Serverless NEGs have **no health checks**; failover between regions is **outlier detection** on the backend
   service (needs `load_balancing_scheme = EXTERNAL_MANAGED`). The eviction parameters *are* the RTO.
-- `default_leader` needs the Spanner **Enterprise** edition; `ALTER DATABASE ... SET OPTIONS (default_leader=...)`
-  can be part of the create DDL.
+- Multi-region instance configurations (and `default_leader`) need the Spanner **Enterprise Plus** edition on new
+  instances (`Feature MULTI_REGION is not available ... in Edition ENTERPRISE`); `ALTER DATABASE ... SET OPTIONS
+  (default_leader=...)` can be part of the create DDL.
 - `ReadWriteTransaction` in the Go client returns the commit timestamp directly; reads inside it use `tx.Read`
   (`ReadUsingIndex` returns only an iterator).
 - Terraform `ignore_changes` on the Cloud Run image/env: the outage drill and CI create revisions by hand, and

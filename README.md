@@ -53,6 +53,6 @@ demo/           scenes.py + recorder.py (narrated demo), demo.mp4, captions, tra
 
 ## Cost while it runs
 
-Spanner `nam3` at 100 processing units (Enterprise edition, needed for `default_leader`) is the only idle cost,
-roughly US$0.45/hour; Cloud Run min-instances and the LB add cents. `./teardown.sh` removes everything and runs the
+Spanner `nam3` at 100 processing units (Enterprise Plus edition, which multi-region configs require) is the only
+idle cost, roughly US$0.6/hour; Cloud Run min-instances and the LB add cents. `./teardown.sh` removes everything and runs the
 billing audit.

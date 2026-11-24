@@ -3,7 +3,7 @@ output "api" { value = "http://${google_compute_global_address.lb.address}" }
 output "run_urls" { value = { for r, s in google_cloud_run_v2_service.ledger : r => s.uri } }
 output "image" { value = local.image }
 output "spanner_instance" { value = google_spanner_instance.ledger.name }
-output "spanner_database" { value = google_spanner_database.ledger.id }
+output "spanner_database" { value = "projects/${var.project_id}/instances/${google_spanner_instance.ledger.name}/databases/${google_spanner_database.ledger.name}" }
 output "spanner_config" { value = var.spanner_config }
 output "ci_service_account" { value = google_service_account.ci.email }
 output "workload_identity_provider" { value = google_iam_workload_identity_pool_provider.github.name }

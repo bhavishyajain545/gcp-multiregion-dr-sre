@@ -7,7 +7,7 @@ resource "google_spanner_instance" "ledger" {
   display_name     = "ledger (multi-region)"
   config           = var.spanner_config
   processing_units = var.spanner_processing_units
-  edition          = "ENTERPRISE" # required for default_leader + multi-region on new instances
+  edition          = "ENTERPRISE_PLUS" # multi-region configs (and default_leader) require Enterprise Plus on new instances
   labels           = { app = var.app }
   depends_on       = [google_project_service.apis]
 }

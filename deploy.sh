@@ -42,7 +42,7 @@ for _ in $(seq 1 60); do
 done
 echo "   edge: $code"
 echo "== 5/5 seed 20 accounts x 1000"
-curl -s -X POST "$API/seed?n=20&balance=1000"; echo
+curl -s -X POST -d "" "$API/seed?n=20&balance=1000"; echo   # the LB answers 411 to a body-less POST without Content-Length
 ./smoke.sh
 echo
 echo "api:        $API"

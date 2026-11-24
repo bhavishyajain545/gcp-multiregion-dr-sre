@@ -17,6 +17,6 @@ gcloud spanner databases execute-sql ledger --instance ledger --project "$PROJEC
 echo "== now (strong):   $(summary)"
 echo "== AS OF T0:       $(summary "?asof=$T0")"
 echo "== recover: POST /ledger/restore?asof=T0 (reads every account AS OF T0, writes it back in one commit)"
-curl -s -X POST "$API/ledger/restore?asof=$T0" -H "X-Admin-Token: $TOKEN"; echo
+curl -s -X POST -d "" "$API/ledger/restore?asof=$T0" -H "X-Admin-Token: $TOKEN"; echo
 echo "== after restore:  $(summary)"
 echo "== backups on the side: $(gcloud spanner backup-schedules list --instance ledger --database ledger --project "$PROJECT_ID" --format='value(name.basename(),spec.cronSpec.text,retentionDuration)' 2>/dev/null)"
