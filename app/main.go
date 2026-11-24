@@ -10,8 +10,10 @@
 //   - reads come in three flavours: strong, bounded-stale (served by the
 //     nearest replica) and time-travel (AS OF a past timestamp), which is
 //     also how a bad DML is undone;
-//   - one knob, OUTAGE=1, makes a whole region answer 503 so the load
-//     balancer's outlier detection can be watched evicting it.
+//   - one knob, OUTAGE=1, makes a whole region answer 503 to every business
+//     request (health probes stay green, so the platform keeps the broken
+//     revision, exactly like a real partial outage) so the load balancer's
+//     outlier detection can be watched evicting it.
 package main
 
 import (
@@ -62,6 +64,7 @@ func main() {
 		ledger = NewMemoryLedger()
 	}
 	srv := NewServer(cfg, ledger)
+	go srv.PollFlags(ctx, 2*time.Second) // the shared outage switch, every 2 s
 	hs := &http.Server{Addr: ":" + cfg.Port, Handler: srv.Routes(), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		slog.Info("listening", "port", cfg.Port, "version", Version, "region", cfg.Region, "revision", cfg.Revision,

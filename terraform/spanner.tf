@@ -17,7 +17,10 @@ resource "google_spanner_database" "ledger" {
   name                     = "ledger"
   database_dialect         = "GOOGLE_STANDARD_SQL"
   version_retention_period = "4h" # how far back AS OF reads (time-travel recovery) can go; max 7d
-  deletion_protection      = false
+  deletion_protection      = false # a demo that is torn down daily; set true for anything real
+  # APPEND new statements at the END of this list. Inserting or editing an earlier statement makes the
+  # provider replace the database (it did, once, taking the data with it); appended statements are applied
+  # in place as a schema update.
   ddl = [
     <<-EOT
     CREATE TABLE Accounts (
@@ -40,6 +43,14 @@ resource "google_spanner_database" "ledger" {
     EOT
     ,
     "CREATE INDEX TransfersByCommitTs ON Transfers(CommitTs DESC)",
+    <<-EOT
+    CREATE TABLE RegionFlags (
+      Region    STRING(32) NOT NULL,
+      Outage    BOOL NOT NULL,
+      UpdatedAt TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp = true)
+    ) PRIMARY KEY (Region)
+    EOT
+    ,
     "ALTER DATABASE ledger SET OPTIONS (default_leader = '${var.default_leader}')",
   ]
 }

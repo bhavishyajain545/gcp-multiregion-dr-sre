@@ -66,13 +66,23 @@ resource "google_cloud_run_v2_service" "ledger" {
         period_seconds    = 2
         failure_threshold = 10
       }
+      # Service health: the global LB fails a region over when < 60% of its instances pass this
+      # readiness probe (serverless NEGs have no health checks of their own). The outage drill
+      # makes /readyz answer 503, so this probe IS the failover signal.
+      readiness_probe {
+        http_get { path = "/readyz" }
+        period_seconds    = 5
+        timeout_seconds   = 3
+        failure_threshold = 2
+      }
     }
     max_instance_request_concurrency = 80
   }
   labels = { app = var.app, region = each.value }
 
   lifecycle {
-    # the outage drill and CI roll new revisions by hand; Terraform must not fight them
+    # the outage drill and CI roll new revisions by hand; Terraform must not fight them. Before an apply that
+    # changes the template, run `terraform apply -refresh-only` so the new revision keeps the live image.
     ignore_changes = [template[0].containers[0].image, template[0].containers[0].env, client, client_version]
   }
   depends_on = [google_spanner_database_iam_member.run_db_user]

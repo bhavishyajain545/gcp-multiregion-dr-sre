@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -18,20 +20,50 @@ type Config struct {
 	Region     string
 	Revision   string
 	Database   string
-	Outage     bool // OUTAGE=1: this region answers 503 to everything (regional-outage drill)
+	Outage     bool // OUTAGE=1: this region answers 503 to every business request (regional-outage drill)
 	AdminToken string
 }
 
 type Server struct {
 	cfg    Config
 	ledger Ledger
+	flag   atomic.Bool // the region's outage flag as last read from the ledger
 }
 
 func NewServer(cfg Config, l Ledger) *Server { return &Server{cfg: cfg, ledger: l} }
 
+// outage: the static env knob or the shared flag.
+func (s *Server) outage() bool { return s.cfg.Outage || s.flag.Load() }
+
+// Refresh reads the region's flag once; PollFlags does it every `every`.
+func (s *Server) Refresh(ctx context.Context) {
+	on, err := s.ledger.GetOutage(ctx, s.cfg.Region)
+	if err != nil {
+		slog.Warn("flag read", "err", err)
+		return
+	}
+	if on != s.flag.Swap(on) {
+		slog.Warn("outage flag changed", "region", s.cfg.Region, "outage", on)
+	}
+}
+
+func (s *Server) PollFlags(ctx context.Context, every time.Duration) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		s.Refresh(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /healthz", s.health) // startup/liveness: the process is up
+	mux.HandleFunc("GET /readyz", s.ready)   // readiness: this instance may take traffic (Cloud Run service health -> load balancer)
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("POST /accounts", s.createAccount)
 	mux.HandleFunc("POST /seed", s.seed)
@@ -40,6 +72,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /transfers", s.recent)
 	mux.HandleFunc("GET /ledger/summary", s.summary)
 	mux.HandleFunc("POST /ledger/restore", s.restore)
+	mux.HandleFunc("POST /admin/outage", s.setOutage)
 	return s.wrap(mux)
 }
 
@@ -50,7 +83,8 @@ func (s *Server) wrap(next http.Handler) http.Handler {
 		w.Header().Set("X-Served-By-Region", s.cfg.Region)
 		w.Header().Set("X-Revision", s.cfg.Revision)
 		rec := &recorder{ResponseWriter: w, status: 200}
-		if s.cfg.Outage && r.URL.Path != "/version" {
+		// /healthz stays green so the platform keeps the revision; the outage is what users see, not what kubelet sees
+		if s.outage() && r.URL.Path != "/version" && r.URL.Path != "/healthz" && r.URL.Path != "/readyz" && r.URL.Path != "/admin/outage" {
 			writeJSON(rec, http.StatusServiceUnavailable, map[string]any{"error": "regional outage drill", "region": s.cfg.Region})
 		} else {
 			next.ServeHTTP(rec, r)
@@ -71,9 +105,21 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"ok": true, "region": s.cfg.Region})
 }
 
+// ready fails under OUTAGE: Cloud Run then counts the instance as not ready, the
+// region's service health drops below 60%, and the global load balancer stops
+// sending it traffic. That is the documented regional-failover signal for
+// serverless backends; outlier detection on 5xx is the second, per-proxy line.
+func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+	if s.outage() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "region": s.cfg.Region, "reason": "regional outage drill"})
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ready": true, "region": s.cfg.Region})
+}
+
 func (s *Server) version(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, 200, map[string]any{"version": Version, "region": s.cfg.Region, "revision": s.cfg.Revision,
-		"outage": s.cfg.Outage, "database": s.cfg.Database})
+		"outage": s.outage(), "database": s.cfg.Database})
 }
 
 func (s *Server) createAccount(w http.ResponseWriter, r *http.Request) {
@@ -201,6 +247,31 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Warn("ledger restored", "as_of", t, "accounts", n, "region", s.cfg.Region)
 	writeJSON(w, 200, map[string]any{"restored_accounts": n, "as_of": t, "region": s.cfg.Region})
+}
+
+// setOutage flips the shared flag for a region: {"region":"us-east4","on":true}. Needs the admin token.
+func (s *Server) setOutage(w http.ResponseWriter, r *http.Request) {
+	if s.cfg.AdminToken == "" || r.Header.Get("X-Admin-Token") != s.cfg.AdminToken {
+		writeErr(w, http.StatusForbidden, "admin token required")
+		return
+	}
+	var in struct {
+		Region string `json:"region"`
+		On     bool   `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Region == "" {
+		writeErr(w, http.StatusBadRequest, "body: {region, on}")
+		return
+	}
+	if err := s.ledger.SetOutage(r.Context(), in.Region, in.On); err != nil {
+		s.fail(w, err)
+		return
+	}
+	if in.Region == s.cfg.Region {
+		s.flag.Store(in.On)
+	}
+	slog.Warn("outage flag set", "target_region", in.Region, "outage", in.On, "served_by", s.cfg.Region)
+	writeJSON(w, 200, map[string]any{"region": in.Region, "outage": in.On, "served_by": s.cfg.Region})
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {

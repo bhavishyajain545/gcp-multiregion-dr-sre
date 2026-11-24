@@ -17,6 +17,11 @@ type Ledger interface {
 	Summary(ctx context.Context, asOf time.Time) (Summary, ReadMeta, error)
 	RestoreAsOf(ctx context.Context, asOf time.Time) (int, error)
 	RecentTransfers(ctx context.Context, limit int) ([]Transfer, error)
+	// RegionFlags: the outage switch, shared through the database so every instance of a
+	// region sees it within one poll (a new revision cannot carry it: Cloud Run will not
+	// route to a revision whose readiness probe fails from the start).
+	GetOutage(ctx context.Context, region string) (bool, error)
+	SetOutage(ctx context.Context, region string, on bool) error
 }
 
 type Account struct {
@@ -77,6 +82,7 @@ type memoryLedger struct {
 	accounts  map[string]*Account
 	transfers map[string]Transfer
 	history   []snapshot // for AS OF reads in tests
+	flags     map[string]bool
 }
 
 type snapshot struct {
@@ -85,7 +91,20 @@ type snapshot struct {
 }
 
 func NewMemoryLedger() *memoryLedger {
-	return &memoryLedger{accounts: map[string]*Account{}, transfers: map[string]Transfer{}}
+	return &memoryLedger{accounts: map[string]*Account{}, transfers: map[string]Transfer{}, flags: map[string]bool{}}
+}
+
+func (m *memoryLedger) GetOutage(_ context.Context, region string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.flags[region], nil
+}
+
+func (m *memoryLedger) SetOutage(_ context.Context, region string, on bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.flags[region] = on
+	return nil
 }
 
 func (m *memoryLedger) snap(at time.Time) {

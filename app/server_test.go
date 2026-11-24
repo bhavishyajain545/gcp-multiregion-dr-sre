@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,13 +49,42 @@ func TestRegionHeaderAndHealth(t *testing.T) {
 	}
 }
 
-func TestOutageKnobFailsEverythingButVersion(t *testing.T) {
-	ts, _ := newTestServer(t, true)
-	if resp, _ := do(t, "GET", ts.URL+"/healthz", nil); resp.StatusCode != 503 {
-		t.Fatalf("outage healthz = %d, want 503", resp.StatusCode)
+func TestOutageFlagViaAdminEndpoint(t *testing.T) {
+	ts, l := newTestServer(t, false)
+	if resp, _ := do(t, "POST", ts.URL+"/admin/outage", map[string]any{"region": "test-region", "on": true}); resp.StatusCode != 403 {
+		t.Fatalf("flag without token = %d, want 403", resp.StatusCode)
 	}
-	if resp, _ := do(t, "GET", ts.URL+"/version", nil); resp.StatusCode != 200 {
-		t.Fatalf("version during outage = %d, want 200", resp.StatusCode)
+	resp, _ := do(t, "POST", ts.URL+"/admin/outage", map[string]any{"region": "test-region", "on": true}, "X-Admin-Token", "secret")
+	if resp.StatusCode != 200 {
+		t.Fatalf("set flag: %d", resp.StatusCode)
+	}
+	if on, _ := l.GetOutage(context.Background(), "test-region"); !on {
+		t.Fatal("flag not stored")
+	}
+	if resp, _ := do(t, "GET", ts.URL+"/readyz", nil); resp.StatusCode != 503 {
+		t.Fatalf("readyz with flag = %d, want 503", resp.StatusCode)
+	}
+	do(t, "POST", ts.URL+"/admin/outage", map[string]any{"region": "test-region", "on": false}, "X-Admin-Token", "secret") // the switch is reachable during the outage
+	if resp, _ := do(t, "GET", ts.URL+"/readyz", nil); resp.StatusCode != 200 {
+		t.Fatalf("readyz after clearing = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestOutageKnobFailsBusinessRoutesOnly(t *testing.T) {
+	ts, _ := newTestServer(t, true)
+	if resp, _ := do(t, "GET", ts.URL+"/ledger/summary", nil); resp.StatusCode != 503 {
+		t.Fatalf("outage summary = %d, want 503", resp.StatusCode)
+	}
+	if resp, _ := do(t, "POST", ts.URL+"/transfers", map[string]any{"from": "a", "to": "b", "amount": 1}); resp.StatusCode != 503 {
+		t.Fatalf("outage transfer = %d, want 503", resp.StatusCode)
+	}
+	for _, p := range []string{"/healthz", "/version"} { // liveness stays green: the revision stays up
+		if resp, _ := do(t, "GET", ts.URL+p, nil); resp.StatusCode != 200 {
+			t.Fatalf("%s during outage = %d, want 200", p, resp.StatusCode)
+		}
+	}
+	if resp, _ := do(t, "GET", ts.URL+"/readyz", nil); resp.StatusCode != 503 { // readiness fails: the region reports unhealthy to the LB
+		t.Fatalf("readyz during outage = %d, want 503", resp.StatusCode)
 	}
 }
 

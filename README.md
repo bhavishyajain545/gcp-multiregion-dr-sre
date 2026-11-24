@@ -6,10 +6,13 @@
 anycast IP** (global external Application Load Balancer, Cloud Armor, 100% request logging), on top of **one
 multi-region Cloud Spanner database** (`nam3`: both regions hold a synchronously committed read-write replica, a
 witness in a third region breaks ties). A regional outage changes *where* requests are served, never *what* the
-ledger says: **RPO 0 by construction**, and the **RTO is the load balancer's outlier-detection eviction time**,
-which the drills measure instead of estimating. Transfers are serializable Spanner transactions keyed by a client
+ledger says: **RPO 0 by construction**, and the **RTO is how fast the load balancer acts on Cloud Run service
+health** (readiness probes; a region with fewer than 60% ready instances stops receiving traffic), with outlier
+detection on 5xx as the second line. The drills measure it instead of estimating it. Transfers are serializable Spanner transactions keyed by a client
 idempotency key, so retries across a failover never double-spend. Reads come in three flavours: strong,
 bounded-stale (nearest replica) and **AS OF a past timestamp**, which is also how a bad DML is undone in seconds.
+The outage switch is a row in the same database: a new revision cannot carry an outage, because Cloud Run never
+routes to a revision whose readiness probe fails from the start, so the drill flips a flag that running instances poll.
 Terraform for every resource; keyless CI that rolls the same digest to both regions one at a time.
 
 - Demo video: [`demo/demo.mp4`](demo/demo.mp4) · captions [`demo/captions.srt`](demo/captions.srt) · transcript [`demo/transcript.md`](demo/transcript.md)
@@ -21,7 +24,7 @@ Terraform for every resource; keyless CI that rolls the same digest to both regi
 
 | Drill | What it does | What it measures |
 |---|---|---|
-| `region-outage.sh` | flips `OUTAGE=1` on the us-east4 revision (every request there answers 503) while a keyed writer (1/s) and an edge probe (4/s) run; heals it 35 s later | **RTO**: first 5xx → last 5xx at the edge (outlier detection: 3 consecutive 5xx in 1 s ejects the region for 30 s); **RPO**: every keyed write present exactly once, `total_balance` unchanged |
+| `region-outage.sh` | flips us-east4's **outage flag** in the ledger (`POST /admin/outage`; every instance polls it every 2 s and then answers 503 on `/readyz` and every business route while `/healthz` stays green) while a keyed writer (1/s) and an edge probe (4/s) run; clears it 40 s later | **RTO**: first 5xx → last 5xx at the edge (readiness probe 5 s × 2 → service health < 60% → LB routes to us-east1; outlier detection as backup); **RPO**: every acknowledged write present exactly once, `total_balance` unchanged |
 | `leader.sh` | measures write p50 from each region's Cloud Run URL, moves the Spanner leader with `ALTER DATABASE ledger SET OPTIONS (default_leader='us-east1')`, measures again | the cost of one cross-region round trip on every commit, and that the leader is a dial you can turn |
 | `time-travel.sh` | an operator runs `UPDATE Accounts SET Balance = 0 WHERE TRUE`; the service reads the ledger `AS OF` a timestamp before it and writes it back in one commit | recovery in seconds from Spanner's version history (4 h retention here, up to 7 d), no backup restore needed; a daily backup schedule is the second line |
 
@@ -31,9 +34,9 @@ moves, it is never created, so `total_balance` is unchanged and `transfers` grew
 ## What is where
 
 ```
-app/            Go service: strong / stale / AS-OF reads, idempotent transfers, OUTAGE knob, admin restore; tests
-terraform/      Spanner (nam3, DDL, version retention, backup schedule), Cloud Run x2, serverless NEGs, global LB with
-                outlier detection + Cloud Armor, SLOs on LB metrics, burn-rate alerts, uptime check, dashboard, WIF/CI SA
+app/            Go service: strong / stale / AS-OF reads, idempotent transfers, readiness + polled outage flag, admin restore/outage; tests
+terraform/      Spanner (nam3, DDL, version retention, backup schedule), Cloud Run x2 (readiness probe = service health),
+                serverless NEGs, global LB with outlier detection + Cloud Armor, SLOs on LB metrics, alerts, uptime check, dashboard, WIF/CI SA
 drills/         probe.sh, region-outage.sh, leader.sh, time-travel.sh
 loadgen/        load.py (concurrency + invariant check)
 .github/        release.yml: test -> build -> push by digest -> deploy B then A, keyless
@@ -43,6 +46,16 @@ teardown.sh     destroy + leftovers + billing audit;  reimport.sh for the rebuil
 docs/           index.html (GitHub Pages), architecture.html (live diagram), architecture.png
 demo/           scenes.py + recorder.py (narrated demo), demo.mp4, captions, transcript
 ```
+
+## Measured (drill run of 2026-11-24, probe at 4 req/s from India)
+
+| | |
+|---|---|
+| RTO (first 5xx → last 5xx at the edge) | **16 s** (flag on 20:10:18, 5xx from 20:10:19, us-east1 serving 100% from 20:10:35); fail-back 17 s after the flag was cleared |
+| RPO | **0 acknowledged writes lost**; 41 keyed writes, 34 committed exactly once, 7 rejected with 503 inside the window; `total_balance` 20 000 → 20 000 |
+| Concurrency | 457 transfers from 20 workers in 20 s, all 201, invariant held; p50 1.24 s end to end from India |
+| Leader move | write p50 us-east4 547 ms / us-east1 662 ms with the leader in us-east4; 553 / 504 ms after `default_leader = 'us-east1'` |
+| Time travel | 20 000 → 0 (bad UPDATE) → 20 000 (AS OF T0) → 20 accounts restored in one commit, ~20 s end to end |
 
 ## SLOs (edge metrics, so a failover is judged the way a user sees it)
 

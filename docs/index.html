@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-region DR with Spanner</title>
+<meta name="description" content="One ledger, two regions, measured RTO/RPO: Cloud Run in us-east4 and us-east1 behind one global load balancer with outlier-detection failover, a multi-region Cloud Spanner database, idempotent transfers, time-travel recovery, SLOs at the edge. Terraform, keyless CI, drills with real numbers.">
+<style>
+  :root{
+    --bg:#0b1020; --panel:#121a30; --ink:#e8edf7; --muted:#9aa8c7; --line:#263157;
+    --blue:#4c8dff; --blue-soft:rgba(76,141,255,.16); --amber:#fbbf24; --amber-soft:rgba(251,191,36,.16);
+    --green:#34d399; --green-soft:rgba(52,211,153,.16); --red:#fb7185; --red-soft:rgba(251,113,133,.16);
+    --purple:#c084fc; --purple-soft:rgba(192,132,252,.16); --cyan:#22d3ee; --cyan-soft:rgba(34,211,238,.16); --code:#070b16; --code-ink:#d7dde5; --radius:14px;
+  }
+  :root:not([data-theme="light"]) { color-scheme: dark; }
+  :root[data-theme="light"]{
+    --bg:#f6f8fc; --panel:#ffffff; --ink:#131a2b; --muted:#56627a; --line:#dde3ee; --code:#0f1419; --code-ink:#e6edf3;
+    --blue:#1a56db; --amber:#b45309; --green:#047857; --red:#be123c; --purple:#7e22ce; --cyan:#0e7490;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,"Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+    background-image:radial-gradient(900px 400px at 50% -10%, rgba(34,211,238,.14), transparent 60%),radial-gradient(700px 400px at 0% 100%, rgba(251,113,133,.10), transparent 60%)}
+  a{color:var(--blue)}
+  .wrap{max-width:1100px;margin:0 auto;padding:0 16px}
+  header{padding:56px 0 24px}
+  .eyebrow{color:var(--muted);font-size:13px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 10px}
+  h1{font-size:clamp(28px,4.5vw,46px);line-height:1.12;margin:0 0 14px;letter-spacing:-.01em}
+  .lede{font-size:18px;color:var(--muted);max-width:820px;margin:0 0 20px}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+  .pill{font-size:13px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+  .cta{display:inline-flex;gap:10px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 16px;border-radius:10px;background:var(--blue);color:#fff;text-decoration:none;font-weight:600}
+  .btn.ghost{background:transparent;color:var(--blue);border:1px solid var(--blue)}
+  nav.toc{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:5;backdrop-filter:blur(6px)}
+  nav.toc .wrap{display:flex;gap:18px;overflow-x:auto;padding:10px 16px;font-size:14px;white-space:nowrap}
+  nav.toc a{text-decoration:none;color:var(--muted)} nav.toc a:hover{color:var(--ink)}
+  section{padding:44px 0;border-top:1px solid var(--line)}
+  h2{font-size:26px;margin:0 0 6px} .sub{color:var(--muted);margin:0 0 22px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card b{display:block;margin-bottom:6px}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .card,.grid>*{min-width:0}
+  .lane-blue{border-top:3px solid var(--blue)} .lane-amber{border-top:3px solid var(--amber)} .lane-green{border-top:3px solid var(--green)} .lane-red{border-top:3px solid var(--red)} .lane-purple{border-top:3px solid var(--purple)} .lane-cyan{border-top:3px solid var(--cyan)}
+  .diagram{position:relative;width:100%;aspect-ratio:1400/800;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:#0b1020}
+  .diagram iframe{position:absolute;left:0;top:0;width:1400px;height:800px;border:0;transform-origin:0 0}
+  .diagram img{display:none;width:100%;height:auto}
+  figcaption{font-size:14px;color:var(--muted);padding:8px 4px 0}
+  pre{background:var(--code);color:var(--code-ink);padding:14px 16px;border-radius:10px;overflow:auto;font:13.5px/1.55 Consolas,"Cascadia Mono",ui-monospace,monospace;border:1px solid var(--line)}
+  code{font-family:Consolas,"Cascadia Mono",ui-monospace,monospace;font-size:.93em;background:var(--blue-soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+  pre code{background:none;padding:0}
+  .tbl{overflow-x:auto;border-radius:var(--radius)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:15px}
+  th{background:var(--blue-soft);font-weight:600}
+  tr:last-child td{border-bottom:0}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;gap:12px}
+  .steps li{position:relative;padding:14px 16px 14px 58px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:14px;width:30px;height:30px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px}
+  .steps li b{display:block;margin-bottom:4px}
+  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;margin-right:6px;font-weight:600}
+  .t-blue{background:var(--blue-soft);color:var(--blue)} .t-amber{background:var(--amber-soft);color:var(--amber)} .t-green{background:var(--green-soft);color:var(--green)} .t-red{background:var(--red-soft);color:var(--red)} .t-purple{background:var(--purple-soft);color:var(--purple)} .t-cyan{background:var(--cyan-soft);color:var(--cyan)}
+  .video{aspect-ratio:16/9;width:100%;border-radius:var(--radius);background:#000;border:1px solid var(--line)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:16px 0}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center}
+  .kpi b{display:block;font-size:26px;margin-bottom:2px} .kpi span{font-size:13px;color:var(--muted)}
+  footer{padding:40px 0;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+  @media (max-width:640px){ th,td{font-size:14px} header{padding-top:36px} }
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <p class="eyebrow">Google Cloud portfolio · project 6 of the series</p>
+  <h1>Multi-region DR: one ledger, two regions, measured RTO / RPO</h1>
+  <p class="lede">The same Go money-transfer service runs in Northern Virginia and South Carolina on Cloud Run, behind one anycast IP on the global load balancer, on top of one multi-region Cloud Spanner database. A regional outage changes <em>where</em> requests are served, never <em>what</em> the ledger says. The recovery point is zero by construction; the recovery time is the load balancer's outlier detection evicting the dead region, and three drills measure it instead of estimating it. Terraform for everything; keyless CI that rolls one region at a time.</p>
+  <div class="pills">
+    <span class="pill">Cloud Spanner nam3</span><span class="pill">Cloud Run × 2 regions</span><span class="pill">Global external ALB</span><span class="pill">Outlier detection</span><span class="pill">Cloud Armor</span><span class="pill">Idempotent transactions</span><span class="pill">Stale + AS OF reads</span><span class="pill">SLOs at the edge</span><span class="pill">Uptime checks</span><span class="pill">Terraform</span><span class="pill">WIF keyless CI</span><span class="pill">Go</span>
+  </div>
+  <div class="cta">
+    <a class="btn" href="#demo">Watch the demo</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre">Source on GitHub</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/blob/main/REBUILD.md">Rebuild runbook</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/tree/main/drills">Drills</a>
+  </div>
+</div></header>
+
+<nav class="toc"><div class="wrap">
+  <a href="#demo">Demo</a><a href="#architecture">Architecture</a><a href="#design">Design</a><a href="#drills">Drills</a><a href="#results">Results</a><a href="#observe">SLOs</a><a href="#delivery">Delivery</a><a href="#deploy">Deploy it</a><a href="#lessons">Lessons</a>
+</div></nav>
+
+<section id="demo"><div class="wrap">
+  <h2>Demo</h2>
+  <p class="sub">Narrated, against the live platform: one IP answering from two regions → twenty concurrent writers and an unchanged invariant → strong, stale and idempotent → the Spanner instance → a region switched off while a probe and a writer run → the write leader moved with one statement → a bad UPDATE undone from version history → the dashboard and SLOs → the keyless rollout.</p>
+  <video class="video" controls preload="metadata" poster="architecture.png">
+    <source src="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/raw/main/demo/demo.mp4" type="video/mp4">
+    <track kind="captions" src="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/raw/main/demo/captions.srt" srclang="en" label="English">
+    Your browser does not support the video tag. <a href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/raw/main/demo/demo.mp4">Download demo.mp4</a>.
+  </video>
+  <p class="sub" style="margin-top:10px">Transcript: <a href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/blob/main/demo/transcript.md">demo/transcript.md</a> · Captions: <a href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/blob/main/demo/captions.srt">demo/captions.srt</a>. The drills in the video ran against the real platform during the recording; the numbers on this page come from them.</p>
+</div></section>
+
+<section id="architecture"><div class="wrap">
+  <h2>Architecture</h2>
+  <p class="sub">Live diagram (the dashed lines animate): clients and the anycast front door on top, the two region islands joined by the Spanner replication ring, the drills underneath.</p>
+  <figure style="margin:0">
+    <div class="diagram" id="diagram"><iframe src="architecture.html" title="Architecture diagram" loading="lazy"></iframe><img src="architecture.png" alt="Architecture diagram"></div>
+    <figcaption>Everything is Terraform: Spanner instance + database (DDL, 4 h version retention, backup schedule), Cloud Run services in both regions, serverless NEGs, backend service with outlier detection and Cloud Armor, global IP, SLOs + burn-rate alerts + uptime check + dashboard, Workload Identity Federation and the CI identity.</figcaption>
+  </figure>
+  <script>
+    (function(){const d=document.getElementById('diagram'),f=d.querySelector('iframe');function fit(){f.style.transform='scale('+(d.clientWidth/1400)+')';}fit();addEventListener('resize',fit);
+     f.addEventListener('error',()=>{f.style.display='none';d.querySelector('img').style.display='block';});})();
+  </script>
+</div></section>
+
+<section id="design"><div class="wrap">
+  <h2>Design decisions</h2>
+  <div class="grid">
+    <div class="card lane-cyan"><b>One database, not two</b><p>Spanner <code>nam3</code> keeps a read-write replica in each serving region and a witness in a third. Every commit is a cross-region Paxos quorum, so there is no replication lag to lose: <b>RPO = 0</b> is a property of the topology, not a backup schedule. The price is one cross-region round trip per write, which the leader drill makes visible.</p></div>
+    <div class="card lane-blue"><b>Failover without health checks</b><p>Serverless NEGs have no health checks. The global external ALB learns a region is down from <b>Cloud Run service health</b>: each instance answers a readiness probe (<code>/readyz</code>, every 5 s, 2 failures), and a region with fewer than 60% ready instances stops receiving traffic. <b>Outlier detection</b> on 5xx (3 in a row within 1 s, 30 s ejection) is the second line; it is per proxy and only statistical at low request rates.</p></div>
+    <div class="card lane-amber"><b>Idempotent transfers</b><p>A transfer is one serializable read-write transaction: read both balances, debit, credit, insert a <code>Transfers</code> row whose primary key is the client's idempotency key. A retry after a failover cut the first response off finds the row and returns <code>duplicate: true</code>. Money never moves twice.</p></div>
+    <div class="card lane-green"><b>Three read flavours</b><p><b>Strong</b> reads go through the leader. <b>Bounded-stale</b> reads (<code>?staleness=15s</code>) are served by the nearest replica and are what dashboards should use. <b>AS OF</b> reads at an exact past timestamp come from the version history, and the restore endpoint turns one into a recovery.</p></div>
+    <div class="card lane-red"><b>An outage you can switch on</b><p>A <code>RegionFlags</code> row in the ledger, polled by every instance every 2 s. When it is on, <code>/readyz</code> and every business request in that region answer 503 while the liveness probe stays green: the instances stay up and report themselves not ready, which is what a real partial outage looks like to the platform. It has to be a flag: Cloud Run never routes to a new revision whose readiness probe fails from the start.</p></div>
+    <div class="card lane-purple"><b>SLOs where the user is</b><p>Availability and latency SLOs use the load balancer's own metrics, split by the serving region, so a failover is judged the way a user would judge it. Terraform ignores the image and environment of the services on purpose: CI and the drills own revisions, Terraform owns everything around them.</p></div>
+  </div>
+</div></section>
+
+<section id="drills"><div class="wrap">
+  <h2>Drills</h2>
+  <p class="sub">Each one is a shell script in <code>drills/</code>; each prints the evidence it was designed to produce.</p>
+  <ol class="steps">
+    <li><b>Region outage <span class="tag t-red">drills/region-outage.sh</span></b>A probe hits the edge 4×/s with a bounded-stale read and a writer commits one keyed transfer per second. The outage flag is set for us-east4 (<code>POST /admin/outage</code> through the other region); the edge fails until the region's service health drops and us-east1 takes 100%; 40 s later the flag is cleared and traffic flows back. Output: a one-line-per-second edge timeline, <b>RTO</b> = first 5xx → last 5xx, <b>RPO</b> = every acknowledged write present exactly once with the total balance unchanged.</li>
+    <li><b>Move the write leader <span class="tag t-red">drills/leader.sh</span></b>Write p50 from each region's own Cloud Run URL, then <code>ALTER DATABASE ledger SET OPTIONS (default_leader = 'us-east1')</code>, then the same measurement. The region next to the leader wins by about one cross-region round trip; Spanner re-elects on its own in a real loss, this is the dial for when you want to choose.</li>
+    <li><b>Bad DML, time-travel recovery <span class="tag t-red">drills/time-travel.sh</span></b>The operator runs <code>UPDATE Accounts SET Balance = 0 WHERE TRUE</code> straight at the database; replication copies the mistake to every region in milliseconds. A summary <code>?asof=T0</code> still shows the right ledger; <code>POST /ledger/restore?asof=T0</code> reads every account at T0 and writes it back in one commit. A daily backup schedule is the second line.</li>
+  </ol>
+</div></section>
+
+<section id="results"><div class="wrap">
+  <h2>Results from the recorded run</h2>
+  <div class="kpis">
+    <div class="kpi"><b>16 s</b><span>edge failing before us-east1 took 100% (RTO)</span></div>
+    <div class="kpi"><b>0</b><span>acknowledged writes lost (RPO); total unchanged</span></div>
+    <div class="kpi"><b>457 / 457</b><span>concurrent transfers 201, total balance unchanged</span></div>
+    <div class="kpi"><b>~20 s</b><span>bad UPDATE → AS OF read → restored</span></div>
+  </div>
+  <div class="tbl"><table>
+    <tr><th>Measurement</th><th>Value</th><th>Notes</th></tr>
+    <tr><td>Region outage: edge timeline</td><td>flag on 20:10:18 → first 5xx 20:10:19 → last 5xx 20:10:35: <b>RTO 16 s</b>, 11 failed probes; us-east1 served 100% until the flag was cleared at 20:10:59; us-east4 back in rotation 20:11:16 (<b>fail-back 17 s</b>)</td><td>Probe at 4 req/s from India through the anycast IP; readiness probe every 5 s, 2 failures; service health threshold 60%; outlier detection as backup.</td></tr>
+    <tr><td>Region outage: writes during the drill</td><td>41 keyed writes, <b>0 acknowledged writes lost</b>; 7 of them got 503 twice inside the 16 s window before the retry budget ran out, 34 committed exactly once; <code>total_balance</code> 20 000 → 20 000</td><td>The writer now retries the same key up to 4 times 2 s apart, so a retry outlives the failover window; the ledger never saw a duplicate.</td></tr>
+    <tr><td>Concurrency (loadgen, 20 workers × 20 s)</td><td>457 requests, 21.4 rps, all 201; p50 1236 ms, p95 1346 ms (client in India → us-east4 → cross-region commit)</td><td><code>total_balance</code> 20 000 → 20 000; <code>transfers</code> +457 = the 201 count.</td></tr>
+    <tr><td>Write p50 with leader in us-east4</td><td>us-east4 547 ms · us-east1 662 ms</td><td>Measured from each region's Cloud Run URL from India, so ~450 ms of that is client RTT; the gap is the cross-region commit.</td></tr>
+    <tr><td>Write p50 after <code>default_leader = 'us-east1'</code></td><td>us-east4 553 ms · us-east1 504 ms</td><td>The advantage swaps regions with one DDL statement; the switch itself took seconds.</td></tr>
+    <tr><td>Time travel</td><td>20 000 → 0 → (AS OF T0) 20 000 → restored 20 accounts → 20 000</td><td>Version retention 4 h; the restore is one multi-row commit from the AS OF read.</td></tr>
+  </table></div>
+</div></section>
+
+<section id="observe"><div class="wrap">
+  <h2>SLOs and observability</h2>
+  <div class="grid">
+    <div class="card lane-green"><b>Availability SLO 99.9%</b><p>Non-5xx share of <code>loadbalancing.googleapis.com/https/request_count</code> on the URL map, 28-day rolling, with 1 h &gt; 14.4× and 6 h &gt; 6× burn-rate alerts.</p></div>
+    <div class="card lane-green"><b>Latency SLO 95% &lt; 500 ms</b><p>Distribution cut on <code>https/backend_latencies</code>: the time between the edge and the serving region, which excludes the client's own RTT.</p></div>
+    <div class="card lane-blue"><b>Dashboard by serving region</b><p>Requests/s and 5xx/s by <code>backend_scope</code>, p95 by region, Cloud Run instances by region, Spanner CPU and API latency by method. A failover is a visible hand-off between two lines.</p></div>
+    <div class="card lane-blue"><b>Uptime check</b><p><code>/healthz</code> on the anycast IP every minute from several Google regions, so "is the edge up" is answered from outside the project.</p></div>
+  </div>
+</div></section>
+
+<section id="delivery"><div class="wrap">
+  <h2>Delivery: keyless and region-aware</h2>
+  <p class="sub">GitHub Actions authenticates through Workload Identity Federation (no key files anywhere): test → build → push by digest → <code>gcloud run services update --image &lt;digest&gt;</code> to us-east1, then to us-east4, <code>max-parallel: 1</code>. A bad build can never take both regions down in the same minute, and the previous revision stays one command away.</p>
+  <pre><code>strategy:
+  max-parallel: 1          # one region at a time: the other keeps serving if this one goes wrong
+  matrix:
+    region: [us-east1, us-east4]</code></pre>
+</div></section>
+
+<section id="deploy"><div class="wrap">
+  <h2>Deploy it yourself</h2>
+  <p class="sub">~12 minutes to a serving edge, ~US$0.6/hour while up (almost all Spanner), one script to remove it. Full detail and the gotchas in <a href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre/blob/main/REBUILD.md">REBUILD.md</a>.</p>
+  <pre><code>git clone https://github.com/bhavishyajain545/gcp-multiregion-dr-sre &amp;&amp; cd gcp-multiregion-dr-sre
+$EDITOR terraform/terraform.tfvars          # project_id, github_repo, alert_email
+./deploy.sh                                 # registry → image v1 → Spanner, Cloud Run ×2, LB, SLOs → seed → smoke
+python3 loadgen/load.py "$(terraform -chdir=terraform output -raw api)"
+drills/region-outage.sh ; drills/leader.sh us-east1 ; drills/time-travel.sh
+./teardown.sh                               # destroy → leftovers → audit</code></pre>
+</div></section>
+
+<section id="lessons"><div class="wrap">
+  <h2>What I learned building it</h2>
+  <div class="grid">
+    <div class="card"><b>Multi-region is an edition</b><p>New Spanner instances need <b>Enterprise Plus</b> for any multi-region configuration (<code>Feature MULTI_REGION is not available ... in Edition ENTERPRISE</code>). The error arrives after the rest of the apply, so the edition is the first thing to check in the plan.</p></div>
+    <div class="card"><b>Outlier detection is not a health check</b><p>The first real drill: 52 s of 503s at the edge and exactly one request moved to the other region. Outlier detection runs independently in every proxy and needs sustained traffic to matter. The failover signal that works for serverless is <b>service health from readiness probes</b>; once <code>/readyz</code> existed and the outage failed it, the hand-off happened.</p></div>
+    <div class="card"><b>A startup probe is not a user</b><p>The very first outage revision answered 503 to everything, including the startup probe, so Cloud Run refused to deploy it and nothing was measured. Liveness stays green, readiness fails, users fail: that is what a partial outage looks like to the platform.</p></div>
+    <div class="card"><b>The LB wants a Content-Length</b><p>A body-less <code>POST</code> through the global ALB gets <code>411 Length Required</code>; the same request straight to Cloud Run works. Every drill sends <code>-d ""</code>.</p></div>
+    <div class="card"><b>Resource ids are not resource names</b><p><code>google_spanner_database.id</code> is <code>instance/database</code>; the client wants <code>projects/…/instances/…/databases/…</code>. The startup probe failing on both regions at once was the first symptom.</p></div>
+    <div class="card"><b>Quotas you meet once</b><p>A billing account links five projects by default; the sixth link fails quietly and the next <code>services enable</code> says <code>UREQ_PROJECT_BILLING_NOT_FOUND</code>. Unlink a finished project first.</p></div>
+    <div class="card"><b>Measure from where it hurts</b><p>From India every write carries ~450 ms of client RTT, which dwarfs the cross-region commit. The leader drill therefore compares the two regions against each other, and the latency SLO uses backend latency, which the client RTT cannot touch.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Bhavishya Jain · <a href="https://github.com/bhavishyajain545/gcp-multiregion-dr-sre">github.com/bhavishyajain545/gcp-multiregion-dr-sre</a> · Part of a Google Cloud portfolio: <a href="https://bhavishyajain545.github.io/gcp-gemini-rag-agent/">Gemini RAG agent</a> · <a href="https://bhavishyajain545.github.io/gcp-gke-platform/">GKE GitOps platform</a> · <a href="https://bhavishyajain545.github.io/gcp-data-ai-pipeline/">Data + AI pipeline</a> · <a href="https://bhavishyajain545.github.io/gcp-llm-gateway-sre/">LLM gateway SRE</a> · <a href="https://bhavishyajain545.github.io/gcp-progressive-delivery-sre/">Progressive delivery</a> · <a href="https://portfolio.futurnex.io">portfolio.futurnex.io</a>
+</div></footer>
+</body>
+</html>

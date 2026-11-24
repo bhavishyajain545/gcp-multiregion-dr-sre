@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Edge probe: N requests/s against the global IP; prints one line per second:
+# Edge probe: N requests/s against the global IP (a cheap bounded-stale read, i.e. real user traffic, not a health
+# endpoint); prints one line per second:
 #   HH:MM:SS  ok=<2xx> err=<5xx> other=<n>  regions: us-east4=<n> us-east1=<n>  p50=<ms>
 # Used by the outage drill to measure how long the edge keeps failing before the other region takes over.
 #   drills/probe.sh <api> <seconds> [rps]
@@ -9,7 +10,7 @@ END=$(( $(date +%s) + SECS ))
 while [ "$(date +%s)" -lt "$END" ]; do
   T=$(date +%T); declare -A R=(); ok=0; err=0; other=0; lat=()
   for _ in $(seq 1 "$RPS"); do
-    out=$(curl -s --max-time 5 -o /dev/null -D /dev/stderr -w '%{http_code} %{time_total}' "$API/healthz" 2>&1 \
+    out=$(curl -s --max-time 5 -o /dev/null -D /dev/stderr -w '%{http_code} %{time_total}' "$API/accounts/acc-000?staleness=15s" 2>&1 \
           | awk 'BEGIN{IGNORECASE=1} /^x-served-by-region:/{gsub(/\r/,"");reg=$2} /^[0-9]{3} /{code=$1;t=$2} END{print code, t, (reg==""?"-":reg)}')
     read -r code t reg <<<"$out"
     case "$code" in 2*) ok=$((ok+1));; 5*) err=$((err+1));; *) other=$((other+1));; esac

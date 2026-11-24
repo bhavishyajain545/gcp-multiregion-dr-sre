@@ -86,8 +86,20 @@ Rebuilding later: `./reimport.sh` first (the WIF pool/provider survive soft-dele
 
 ## Gotchas met while building
 
-- Serverless NEGs have **no health checks**; failover between regions is **outlier detection** on the backend
-  service (needs `load_balancing_scheme = EXTERNAL_MANAGED`). The eviction parameters *are* the RTO.
+- Serverless NEGs have **no health checks**. Regional failover comes from **Cloud Run service health**: give the
+  service a **readiness probe** and `min_instance_count >= 1`; a region with < 60% ready instances stops receiving
+  LB traffic. Outlier detection (needs `EXTERNAL_MANAGED`) is per Envoy proxy and only statistical at low QPS: with a
+  4 req/s probe and no readiness probe the first drill saw 52 s of 503s and one single request moved regions.
+- `google_spanner_database.ddl` is append-only in practice: inserting a statement before an existing one made the
+  provider **replace the database** (data gone; `deletion_protection = false` let it). Append new DDL at the end,
+  and keep `deletion_protection = true` anywhere the data matters. A replaced database also loses its database-level
+  IAM policy while Terraform still believes the binding exists (same id): `terraform apply
+  -replace=google_spanner_database_iam_member.run_db_user`, or the service gets `PermissionDenied` on every read.
+- An outage cannot be *deployed*: a revision whose readiness probe fails from the start never becomes ready and
+  `gcloud run services update` fails (`Container failed to become healthy`). The drill therefore flips a flag in
+  Spanner (`RegionFlags`) that running instances poll every 2 s.
+- `ignore_changes` on image/env means a template change (e.g. adding the probe) would roll a new revision with the
+  image recorded in state; run `terraform apply -refresh-only` first so the live image is used.
 - Multi-region instance configurations (and `default_leader`) need the Spanner **Enterprise Plus** edition on new
   instances (`Feature MULTI_REGION is not available ... in Edition ENTERPRISE`); `ALTER DATABASE ... SET OPTIONS
   (default_leader=...)` can be part of the create DDL.

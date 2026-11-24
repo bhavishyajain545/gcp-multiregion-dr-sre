@@ -174,6 +174,24 @@ func (s *spannerLedger) RestoreAsOf(ctx context.Context, asOf time.Time) (int, e
 	return len(muts), nil
 }
 
+func (s *spannerLedger) GetOutage(ctx context.Context, region string) (bool, error) {
+	row, err := s.c.Single().ReadRow(ctx, "RegionFlags", spanner.Key{region}, []string{"Outage"})
+	if err != nil {
+		if spanner.ErrCode(err) == codes.NotFound {
+			return false, nil
+		}
+		return false, err
+	}
+	var on bool
+	return on, row.Columns(&on)
+}
+
+func (s *spannerLedger) SetOutage(ctx context.Context, region string, on bool) error {
+	_, err := s.c.Apply(ctx, []*spanner.Mutation{spanner.InsertOrUpdate("RegionFlags",
+		[]string{"Region", "Outage", "UpdatedAt"}, []interface{}{region, on, spanner.CommitTimestamp})})
+	return err
+}
+
 func (s *spannerLedger) RecentTransfers(ctx context.Context, limit int) ([]Transfer, error) {
 	it := s.c.Single().Query(ctx, spanner.Statement{
 		SQL:    `SELECT IdempotencyKey, FromAccount, ToAccount, Amount, Region, CommitTs FROM Transfers ORDER BY CommitTs DESC LIMIT @limit`,

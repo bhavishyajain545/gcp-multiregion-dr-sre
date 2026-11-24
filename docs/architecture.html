@@ -55,7 +55,7 @@
     <path d="M740,176 C840,230 970,230 1040,262" stroke="#22d3ee" stroke-width="2.4" fill="none" marker-end="url(#ac)" class="flow"/>
     <!-- failover arrow (ejected region) -->
     <path d="M400,262 C520,206 880,206 1000,262" stroke="#fb7185" stroke-width="2" fill="none" marker-end="url(#ar)" stroke-dasharray="4 4"/>
-    <text x="520" y="214" fill="#fecdd3" font-size="11" font-weight="600">A answers 5xx → outlier detection ejects it → B takes 100% (that eviction time is the RTO)</text>
+    <text x="470" y="214" fill="#fecdd3" font-size="11" font-weight="600">A's readiness fails → service health &lt; 60% → the LB routes to B; outlier detection on 5xx is the second line (that hand-off time is the RTO)</text>
     <!-- Spanner replication ring: east4 <-> east1 via witness -->
     <path d="M613,500 H787" stroke="#22d3ee" stroke-width="3" fill="none" class="slow"/>
     <path d="M613,494 C640,470 660,456 687,456" stroke="#22d3ee" stroke-width="2" fill="none" class="slow" opacity=".7"/>
@@ -74,12 +74,12 @@
   <!-- clients -->
   <div class="card c-blue" style="left:40px;top:108px;width:118px;height:86px"><b>Clients</b><span>curl, loadgen, uptime probes from 3 continents</span></div>
   <!-- anycast front door -->
-  <div class="anycast"><b>one anycast IP</b><span>global external ALB · Cloud Armor · logs 100%</span></div>
+  <div class="anycast"><b>one anycast IP</b><span>global external ALB · service health + outlier detection · Cloud Armor</span></div>
   <div class="card c-green" style="left:1180px;top:92px;width:184px;height:80px"><b>SLOs at the edge</b><span>99.9% non-5xx · 95% &lt; 500 ms · burn-rate alerts · uptime check from 3 continents</span></div>
 
   <!-- island A -->
   <div class="island" style="left:60px;top:262px;width:540px;height:300px"><label style="color:var(--cyan)">Region A · us-east4 · Northern Virginia</label></div>
-  <div class="card c-cyan" style="left:84px;top:300px;width:230px;height:120px"><b>Cloud Run · ledger-api (Go)</b><span>min 1 instance, 80 concurrent req/instance · X-Served-By-Region on every response · OUTAGE=1 turns the region into a 503 wall for the drill</span><i class="tag t-cyan">revision per deploy</i></div>
+  <div class="card c-cyan" style="left:84px;top:300px;width:230px;height:120px"><b>Cloud Run · ledger-api (Go)</b><span>min 1 instance · readiness probe /readyz feeds <b style="display:inline;font-size:11px">service health</b> to the LB · the drill flips a RegionFlags row that every instance polls: /readyz and every business route answer 503</span><i class="tag t-cyan">revision per deploy</i></div>
   <div class="card c-amber" style="left:330px;top:300px;width:250px;height:120px"><b>Spanner replica · read-write · LEADER</b><span>writes commit here after a cross-region quorum · strong reads served locally · <code>default_leader</code> movable with one DDL</span><i class="tag t-amber">nam3</i></div>
   <div class="replica leader" style="left:587px;top:487px"></div><div class="rl" style="left:536px;top:546px">leader replica</div>
   <div class="card c-blue" style="left:84px;top:436px;width:230px;height:104px"><b>Transfers = one serializable txn</b><span>read both balances → debit, credit, insert Transfers row keyed by the client's idempotency key → commit timestamp is the audit clock · retries never double-spend</span></div>
@@ -93,7 +93,7 @@
   <div class="card c-cyan" style="left:824px;top:300px;width:230px;height:120px"><b>Cloud Run · ledger-api (Go)</b><span>identical image and config · takes 100% of traffic within seconds when A is ejected · never knows it is "secondary"</span><i class="tag t-cyan">same digest</i></div>
   <div class="card c-cyan" style="left:1070px;top:300px;width:250px;height:120px"><b>Spanner replica · read-write</b><span>full copy, synchronously committed · local strong reads · becomes leader automatically if A is lost, or by the leader drill</span><i class="tag t-cyan">nam3</i></div>
   <div class="replica" style="left:787px;top:487px"></div><div class="rl" style="left:808px;top:546px">read-write replica</div>
-  <div class="card c-green" style="left:824px;top:436px;width:496px;height:104px"><b>What a regional loss costs here</b><span>RPO 0 by construction (no async replica) · RTO = outlier-detection eviction at the edge (3 consecutive 5xx / 1 s, 30 s ejection) measured by a probe at 4 req/s · writes keep flowing: the surviving region holds a full replica and the witness still gives a quorum</span></div>
+  <div class="card c-green" style="left:824px;top:436px;width:496px;height:104px"><b>What a regional loss costs here</b><span>RPO 0 by construction (no async replica) · RTO = readiness-probe failure (5 s × 2) + the LB acting on service health, measured by a probe at 4 req/s; outlier detection (3 × 5xx / 1 s, 30 s) as backup · the surviving region holds a full replica and the witness still gives a quorum</span></div>
 
   <!-- CI -->
   <div class="card c-purple" style="left:1180px;top:180px;width:184px;height:74px"><b>GitHub Actions · keyless (WIF)</b><span>test → build → push by digest → deploy that digest to B, then A</span></div>

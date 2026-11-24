@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 PROJECT_ID="$(grep -E '^project_id' terraform/terraform.tfvars | cut -d'"' -f2)"
 API="$(terraform -chdir=terraform output -raw api)"
 TOKEN="$(terraform -chdir=terraform output -raw admin_token)"
-summary() { curl -s "$API/ledger/summary$1" | python3 -c 'import sys,json; d=json.load(sys.stdin); s=d["summary"]; r=d["read"]; print(f"accounts={s[\"accounts\"]} total_balance={s[\"total_balance\"]} transfers={s[\"transfers\"]}  ({r[\"read_kind\"]} @ {r[\"read_timestamp\"]})")'; }
+summary() { python3 drills/summary.py "$API" "${1:-}"; }
 echo "== healthy:        $(summary)"
 T0="$(date -u +%Y-%m-%dT%H:%M:%S.%6NZ)"; sleep 2
 echo "== T0 = $T0 (the last known-good moment)"
