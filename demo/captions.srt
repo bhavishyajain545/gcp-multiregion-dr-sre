@@ -1,0 +1,171 @@
+1
+00:00:00,300 --> 00:00:04,960
+This project is about losing a region on purpose and measuring what it costs.
+
+2
+00:00:04,960 --> 00:00:15,492
+The same Go service, a small money-transfer ledger, runs in two regions on Cloud Run, Northern Virginia and South Carolina, behind one anycast IP on the global load balancer.
+
+3
+00:00:15,492 --> 00:00:25,660
+Underneath there is one multi-region Cloud Spanner database: both regions hold a synchronously committed read-write replica and a witness in a third region breaks ties.
+
+4
+00:00:25,660 --> 00:00:41,093
+So a regional outage changes where requests are served, never what the ledger says: the recovery point is zero by construction, and the recovery time is the load balancer's outlier detection evicting the dead region, which we measure rather than estimate.
+
+5
+00:00:41,093 --> 00:00:54,348
+Transfers are serializable Spanner transactions keyed by a client idempotency key, reads come strong, stale or as of a past timestamp, and everything is Terraform with a keyless pipeline that rolls one region at a time.
+
+6
+00:00:55,757 --> 00:00:57,572
+One IP, two regions, one ledger.
+
+7
+00:00:57,572 --> 00:01:07,777
+Every response carries the region that served it; from where I am, the load balancer picks the nearest healthy one, and both regions answer the same question with the same numbers.
+
+8
+00:01:07,777 --> 00:01:19,853
+Calling each region's Cloud Run URL directly shows the two deployments are identical, down to the revision, and the ledger summary is the invariant we will keep checking: twenty accounts, twenty thousand in total.
+
+9
+00:01:21,459 --> 00:01:23,257
+Consistency under concurrency.
+
+10
+00:01:23,257 --> 00:01:34,287
+Twenty workers fire keyed transfers through the edge for twenty seconds; some land in one region, some in the other, and all of them are serializable transactions on the same database.
+
+11
+00:01:34,287 --> 00:01:41,780
+Afterwards the total balance is exactly what it was and the transfer count grew by exactly the number of successful requests.
+
+12
+00:01:41,780 --> 00:01:46,515
+Money moved, none was created, none was lost, with two regions writing at once.
+
+13
+00:01:48,124 --> 00:01:50,599
+Three ways to read, and one way to retry.
+
+14
+00:01:50,599 --> 00:01:54,462
+A strong read goes to the leader and returns the freshest value.
+
+15
+00:01:54,462 --> 00:02:02,853
+A bounded-stale read is allowed to be up to fifteen seconds old and is served by the nearest replica, which is what a dashboard should use.
+
+16
+00:02:02,853 --> 00:02:11,908
+And a transfer retried with the same idempotency key, say after a failover cut the first response off, comes back as a duplicate: nothing moves twice.
+
+17
+00:02:13,512 --> 00:02:22,652
+The database in the console: instance configuration nam3, Enterprise Plus, a hundred processing units, which is a tenth of a node and plenty for this.
+
+18
+00:02:22,652 --> 00:02:26,674
+Two read-write replicas, one per serving region, plus the witness.
+
+19
+00:02:26,674 --> 00:02:32,280
+The default leader sits in Northern Virginia; we will move it later with a single statement.
+
+20
+00:02:34,387 --> 00:02:36,176
+Drill one: a region goes dark.
+
+21
+00:02:36,176 --> 00:02:41,723
+A probe hits the edge four times a second and a writer commits one keyed transfer per second.
+
+22
+00:02:41,723 --> 00:02:47,508
+Then I flip the outage switch on Northern Virginia, so every request there answers five-oh-three.
+
+23
+00:02:47,508 --> 00:02:53,830
+The edge fails for a few seconds, outlier detection ejects the region, and South Carolina takes all of it.
+
+24
+00:02:53,830 --> 00:02:56,335
+That window is the measured recovery time.
+
+25
+00:02:56,335 --> 00:02:59,019
+Then the region heals and traffic flows back.
+
+26
+00:02:59,019 --> 00:03:05,162
+The recovery point: every keyed write is in the ledger exactly once and the total balance did not move.
+
+27
+00:03:05,162 --> 00:03:08,323
+That is what one database under two regions buys you.
+
+28
+00:03:10,440 --> 00:03:12,399
+Drill two: where do writes commit?
+
+29
+00:03:12,399 --> 00:03:18,967
+Spanner keeps the leader replicas in one region, and a write from the other region pays a cross-region round trip.
+
+30
+00:03:18,967 --> 00:03:25,880
+Write latency from each region, then one DDL statement moves the default leader to South Carolina, and the numbers swap.
+
+31
+00:03:25,880 --> 00:03:32,736
+In a real failover Spanner elects a new leader on its own within seconds; this is the dial for when you want to choose.
+
+32
+00:03:34,347 --> 00:03:37,569
+Drill three is the one replication cannot save you from.
+
+33
+00:03:37,569 --> 00:03:44,187
+An operator runs an update that zeroes every balance, and the replicas faithfully copy the mistake in milliseconds.
+
+34
+00:03:44,187 --> 00:03:55,524
+Spanner's version history does what replication cannot: a read as of a timestamp before the mistake still shows the right ledger, and the restore endpoint writes that state back in a single commit.
+
+35
+00:03:55,524 --> 00:04:00,243
+Seconds, not a backup restore; the daily backup schedule stays as the second line.
+
+36
+00:04:01,844 --> 00:04:10,582
+The dashboard splits the edge by serving region: requests and five-hundreds per region, p95 per region, Cloud Run instances, Spanner CPU and API latency.
+
+37
+00:04:10,582 --> 00:04:16,578
+The outage shows up as a short burst of errors in one region and the other region's line taking the load.
+
+38
+00:04:16,578 --> 00:04:29,828
+The SLOs are measured at the edge, the way a user would: ninety-nine point nine percent non-five-hundred, and ninety-five percent under five hundred milliseconds, each with burn-rate alerts and an uptime check from three continents.
+
+39
+00:04:31,933 --> 00:04:45,255
+Delivery is keyless and region-aware: GitHub Actions tests, builds, pushes by digest, and rolls that digest to South Carolina first, then Northern Virginia, one at a time, so a bad build can never take both regions down in the same minute.
+
+40
+00:04:45,255 --> 00:04:50,941
+Terraform owns everything around the revisions and deliberately ignores the image and the outage knob.
+
+41
+00:04:52,557 --> 00:05:10,623
+Everything shown is in the repository: the Go service with its three read modes and idempotent transfers, Terraform for Spanner, Cloud Run, the global load balancer with its eviction policy, SLOs, alerts and dashboard, the three drill scripts, the load generator and the keyless workflow.
+
+42
+00:05:10,623 --> 00:05:15,830
+The only idle cost is the Spanner instance, and the teardown script removes it all.
+
+43
+00:05:15,830 --> 00:05:17,085
+Thanks for watching.

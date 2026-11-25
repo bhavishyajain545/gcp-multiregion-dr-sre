@@ -138,15 +138,15 @@
 <section id="results"><div class="wrap">
   <h2>Results from the recorded run</h2>
   <div class="kpis">
-    <div class="kpi"><b>16 s</b><span>edge failing before us-east1 took 100% (RTO)</span></div>
-    <div class="kpi"><b>0</b><span>acknowledged writes lost (RPO); total unchanged</span></div>
+    <div class="kpi"><b>8 s</b><span>edge failing before us-east1 took 100% (RTO, recorded run; 16 s in an earlier run)</span></div>
+    <div class="kpi"><b>0</b><span>writes lost (RPO): 31 keyed writes, 31 committed exactly once</span></div>
     <div class="kpi"><b>457 / 457</b><span>concurrent transfers 201, total balance unchanged</span></div>
     <div class="kpi"><b>~20 s</b><span>bad UPDATE → AS OF read → restored</span></div>
   </div>
   <div class="tbl"><table>
     <tr><th>Measurement</th><th>Value</th><th>Notes</th></tr>
-    <tr><td>Region outage: edge timeline</td><td>flag on 20:10:18 → first 5xx 20:10:19 → last 5xx 20:10:35: <b>RTO 16 s</b>, 11 failed probes; us-east1 served 100% until the flag was cleared at 20:10:59; us-east4 back in rotation 20:11:16 (<b>fail-back 17 s</b>)</td><td>Probe at 4 req/s from India through the anycast IP; readiness probe every 5 s, 2 failures; service health threshold 60%; outlier detection as backup.</td></tr>
-    <tr><td>Region outage: writes during the drill</td><td>41 keyed writes, <b>0 acknowledged writes lost</b>; 7 of them got 503 twice inside the 16 s window before the retry budget ran out, 34 committed exactly once; <code>total_balance</code> 20 000 → 20 000</td><td>The writer now retries the same key up to 4 times 2 s apart, so a retry outlives the failover window; the ledger never saw a duplicate.</td></tr>
+    <tr><td>Region outage: edge timeline</td><td>recorded run: flag on 20:34:47 → first 5xx 20:34:45* → last 5xx 20:34:53: <b>RTO 8 s</b>, 8 failed probes of 360; us-east1 served 100% until the flag was cleared at 20:35:28. Earlier run: 16 s, 11 failed probes, fail-back 17 s after the flag was cleared. (*the probe line is stamped at the start of its second)</td><td>Probe at 4 req/s from India through the anycast IP; readiness probe every 5 s, 2 failures; service health threshold 60%; outlier detection as backup.</td></tr>
+    <tr><td>Region outage: writes during the drill</td><td>recorded run: 31 keyed writes, 3 needed a retry, <b>31 committed exactly once</b> (transfers 450 → 481); <code>total_balance</code> 20 000 → 20 000. Earlier run with a single retry: 7 of 41 rejected inside the window, still 0 duplicates and 0 acknowledged writes lost</td><td>The writer retries the same idempotency key up to 4 times 2 s apart, so a retry outlives the failover window; the ledger never saw a duplicate.</td></tr>
     <tr><td>Concurrency (loadgen, 20 workers × 20 s)</td><td>457 requests, 21.4 rps, all 201; p50 1236 ms, p95 1346 ms (client in India → us-east4 → cross-region commit)</td><td><code>total_balance</code> 20 000 → 20 000; <code>transfers</code> +457 = the 201 count.</td></tr>
     <tr><td>Write p50 with leader in us-east4</td><td>us-east4 547 ms · us-east1 662 ms</td><td>Measured from each region's Cloud Run URL from India, so ~450 ms of that is client RTT; the gap is the cross-region commit.</td></tr>
     <tr><td>Write p50 after <code>default_leader = 'us-east1'</code></td><td>us-east4 553 ms · us-east1 504 ms</td><td>The advantage swaps regions with one DDL statement; the switch itself took seconds.</td></tr>

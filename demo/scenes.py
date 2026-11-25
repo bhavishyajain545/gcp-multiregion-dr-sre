@@ -212,21 +212,24 @@ async def main() -> None:
             ci_tab = await demo.new_tab(CI_URL)
         await demo.capture(page)
 
-    # ---- 1 architecture ----
+    # ---- 1 architecture (rendered BEFORE the scene: the first scene must not open on a white tab) ----
+    await page.bring_to_front()
+    await page.goto((ROOT / "docs" / "architecture.html").as_uri(), wait_until="commit")
+    await page.wait_for_selector(".canvas", timeout=15000)
+    width = 0.0
+    for _ in range(6):
+        width = await page.evaluate(
+            "() => { if (!document.getElementById('demo-still')) { const st = document.createElement('style'); st.id = 'demo-still'; st.textContent = '*{animation:none!important}'; document.head.appendChild(st); }"
+            " document.body.style.zoom = '1.33'; document.body.style.margin = '0';"
+            " return document.querySelector('.canvas').getBoundingClientRect().width; }")
+        if width > 1800:
+            break
+        await asyncio.sleep(0.5)
+    print(f"  architecture canvas width after zoom: {width:.0f}px")
+    await asyncio.sleep(1.5)
+
     async def s1():
-        await page.bring_to_front()
-        await page.goto((ROOT / "docs" / "architecture.html").as_uri(), wait_until="commit")
-        await page.wait_for_selector(".canvas", timeout=15000)
-        width = 0.0
-        for _ in range(6):
-            width = await page.evaluate(
-                "() => { if (!document.getElementById('demo-still')) { const st = document.createElement('style'); st.id = 'demo-still'; st.textContent = '*{animation:none!important}'; document.head.appendChild(st); }"
-                " document.body.style.zoom = '1.33'; document.body.style.margin = '0';"
-                " return document.querySelector('.canvas').getBoundingClientRect().width; }")
-            if width > 1800:
-                break
-            await asyncio.sleep(0.5)
-        print(f"  architecture canvas width after zoom: {width:.0f}px")
+        pass
     await demo.scene("Architecture", NARRATION["arch"], s1)
 
     # ---- 2 one IP, two regions ----
@@ -278,7 +281,7 @@ async def main() -> None:
 
     # ---- 5 Spanner console ----
     if use_cdp:
-        await console_ready(spanner_tab, "nam3")
+        await console_ready(spanner_tab, "ledger")
 
         async def s5():
             await demo.capture(spanner_tab)

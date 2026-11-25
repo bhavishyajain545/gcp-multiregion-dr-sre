@@ -51,8 +51,8 @@ demo/           scenes.py + recorder.py (narrated demo), demo.mp4, captions, tra
 
 | | |
 |---|---|
-| RTO (first 5xx → last 5xx at the edge) | **16 s** (flag on 20:10:18, 5xx from 20:10:19, us-east1 serving 100% from 20:10:35); fail-back 17 s after the flag was cleared |
-| RPO | **0 acknowledged writes lost**; 41 keyed writes, 34 committed exactly once, 7 rejected with 503 inside the window; `total_balance` 20 000 → 20 000 |
+| RTO (first 5xx → last 5xx at the edge) | **8 s** in the recorded run (8 failed probes of 360, us-east1 serving 100% afterwards); 16 s in an earlier run, fail-back 17 s after the flag was cleared |
+| RPO | **0**: 31 keyed writes during the recorded drill, 3 needed a retry (same key), 31 committed exactly once; `total_balance` 20 000 → 20 000 |
 | Concurrency | 457 transfers from 20 workers in 20 s, all 201, invariant held; p50 1.24 s end to end from India |
 | Leader move | write p50 us-east4 547 ms / us-east1 662 ms with the leader in us-east4; 553 / 504 ms after `default_leader = 'us-east1'` |
 | Time travel | 20 000 → 0 (bad UPDATE) → 20 000 (AS OF T0) → 20 accounts restored in one commit, ~20 s end to end |

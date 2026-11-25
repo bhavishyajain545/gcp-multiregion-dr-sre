@@ -1,0 +1,57 @@
+[
+  {
+    "title": "Architecture",
+    "start": 0.3,
+    "end": 55.16
+  },
+  {
+    "title": "One IP two regions",
+    "start": 55.76,
+    "end": 80.86
+  },
+  {
+    "title": "Concurrency",
+    "start": 81.46,
+    "end": 107.52
+  },
+  {
+    "title": "Reads and idempotency",
+    "start": 108.12,
+    "end": 132.91
+  },
+  {
+    "title": "Spanner",
+    "start": 133.51,
+    "end": 153.79
+  },
+  {
+    "title": "Region outage drill",
+    "start": 154.39,
+    "end": 189.84
+  },
+  {
+    "title": "Leader drill",
+    "start": 190.44,
+    "end": 213.75
+  },
+  {
+    "title": "Time travel drill",
+    "start": 214.35,
+    "end": 241.24
+  },
+  {
+    "title": "Dashboard and SLOs",
+    "start": 241.84,
+    "end": 271.33
+  },
+  {
+    "title": "Keyless CI",
+    "start": 271.93,
+    "end": 291.96
+  },
+  {
+    "title": "Wrap-up",
+    "start": 292.56,
+    "end": 318.6
+  }
+]

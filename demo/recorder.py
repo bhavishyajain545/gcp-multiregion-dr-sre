@@ -204,8 +204,18 @@ class Demo:
         try:
             await self.page.goto("about:blank", wait_until="commit", timeout=8000)
         except Exception as exc:
-            print(f"  ! about:blank: {type(exc).__name__}; continuing with set_content")
-        await self.page.set_content(_terminal_html(title), wait_until="commit")
+            print(f"  ! about:blank: {type(exc).__name__}; waiting for the late navigation")
+            try:
+                await self.page.wait_for_load_state("commit", timeout=8000)
+            except Exception:
+                pass
+        for attempt in range(4):  # a late about:blank commit destroys the context set_content just created
+            try:
+                await self.page.set_content(_terminal_html(title), wait_until="commit")
+                break
+            except Exception as exc:
+                print(f"  ! set_content attempt {attempt + 1}: {type(exc).__name__}: {str(exc)[:80]}")
+                await asyncio.sleep(1.5)
         for cmd, output in steps:
             await self.page.evaluate("(c) => window.__prompt(c)", "")
             for ch in cmd:
